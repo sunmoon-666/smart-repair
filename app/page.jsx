@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { requestRepairs, supabase } from '../lib/repair-client';
+import { requestRepairs, requestSuggestions, supabase } from '../lib/repair-client';
 
 const fields = [
   ['reporterName', '姓名'],
@@ -134,6 +134,23 @@ function Reports() {
     }
   }
 
+  async function suggest() {
+    const { id, deviceType, description } = selected;
+    setBusy(true);
+    setError('');
+    setNotice('正在生成排查建议…');
+    try {
+      const { suggestions } = await requestSuggestions({ repairId: id, deviceType, description });
+      setReports(current => current.map(report => report.id === id ? { ...report, suggestions } : report));
+      setNotice('排查建议已保存。');
+    } catch (error) {
+      setNotice('');
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function signOut() {
     setBusy(true);
     try {
@@ -218,6 +235,22 @@ function Reports() {
                   {statuses.map(status => <option key={status}>{status}</option>)}
                 </select>
               </label>
+              <div className="mt-5">
+                <h3 className="font-semibold">AI 排查建议</h3>
+                {selected.suggestions.length ? (
+                  <ol className="mt-2 list-decimal space-y-2 pl-5 text-sm">
+                    {selected.suggestions.map((suggestion, index) => <li key={index}>{suggestion}</li>)}
+                  </ol>
+                ) : (
+                  <>
+                    <p className="mt-2 text-sm text-slate-600">生成建议会把设备和故障描述发送给 DeepSeek。</p>
+                    <button type="button" disabled={busy || !loaded} onClick={suggest}
+                      className="mt-2 rounded-md bg-slate-900 px-4 py-2 text-white disabled:opacity-50">
+                      生成排查建议
+                    </button>
+                  </>
+                )}
+              </div>
             </section>
           )}
         </div>
