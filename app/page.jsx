@@ -25,6 +25,11 @@ export default function RepairPage() {
   const [reports, setReports] = useState(demoReports);
   const [selectedId, setSelectedId] = useState(demoReports[0].id);
   const [error, setError] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [notice, setNotice] = useState('');
+  const visibleReports = statusFilter
+    ? reports.filter(report => report.status === statusFilter)
+    : reports;
   const selected = reports.find(report => report.id === selectedId);
 
   function addReport(event) {
@@ -40,7 +45,9 @@ export default function RepairPage() {
     const report = { ...values, id: crypto.randomUUID(), status: statuses[0] };
     setReports(current => [report, ...current]);
     setSelectedId(report.id);
+    setStatusFilter('');
     setError('');
+    setNotice('报修已添加，初始状态为待处理。');
     form.reset();
   }
 
@@ -48,6 +55,7 @@ export default function RepairPage() {
     setReports(current => current.map(report =>
       report.id === selectedId ? { ...report, status } : report
     ));
+    setNotice('报修状态已更新为' + status + '。');
   }
 
   return (
@@ -56,6 +64,7 @@ export default function RepairPage() {
         <h1 className="text-3xl font-semibold">智能报修小助手</h1>
         <p className="mt-2 text-sm text-slate-600">演示数据仅保留在当前页面，刷新后重置。</p>
       </header>
+      <p role="status" className="text-sm text-slate-700">{notice}</p>
       <div className="grid gap-6 md:grid-cols-2">
         <section className={card} aria-labelledby="new-report">
           <h2 id="new-report" className="text-xl font-semibold">提交报修</h2>
@@ -75,8 +84,16 @@ export default function RepairPage() {
         <div className="space-y-6">
           <section className={card} aria-labelledby="report-list">
             <h2 id="report-list" className="text-xl font-semibold">报修列表</h2>
+            <label className="mt-3 block text-sm font-medium">
+              按状态筛选
+              <select className={inputStyle} value={statusFilter} onChange={event => setStatusFilter(event.target.value)}>
+                <option value="">全部状态</option>
+                {statuses.map(status => <option key={status}>{status}</option>)}
+              </select>
+            </label>
+            {visibleReports.length === 0 && <p className="mt-3 text-sm text-slate-600">此状态下暂无报修。</p>}
             <ul className="mt-3 divide-y divide-slate-200">
-              {reports.map(report => (
+              {visibleReports.map(report => (
                 <li key={report.id}>
                   <button type="button" aria-pressed={report.id === selectedId}
                     className="flex w-full flex-wrap items-center justify-between gap-2 rounded px-2 py-3 text-left hover:bg-slate-50 aria-pressed:bg-slate-100"
