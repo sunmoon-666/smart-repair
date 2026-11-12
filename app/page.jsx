@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { requestRepairs, supabase } from '../lib/repair-client';
 
 const fields = [
   ['reporterName', '姓名'],
@@ -10,20 +11,81 @@ const fields = [
 ];
 
 const statuses = ['待处理', '处理中', '已完成'];
-const demoReports = [{
-  id: 'demo-1',
-  reporterName: '测试用户',
-  officeArea: '二楼办公室',
-  deviceType: '打印机',
-  description: '已发送打印任务，设备没有响应。',
-  status: '待处理',
-}];
 const card = 'rounded-xl border border-slate-200 bg-white p-5';
 const inputStyle = 'mt-1 w-full rounded-md border border-slate-400 px-3 py-2';
 
 export default function RepairPage() {
-  const [reports, setReports] = useState(demoReports);
-  const [selectedId, setSelectedId] = useState(demoReports[0].id);
+  const [userId, setUserId] = useState(undefined);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserId(session?.user.id ?? null);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) {
+    return <main className="mx-auto max-w-lg p-8">Supabase 尚未配置，请检查 Vercel 预览环境变量。</main>;
+  }
+  if (userId === undefined) return <main className="p-8">正在检查登录状态…</main>;
+  return userId ? <Reports key={userId} /> : <SignIn />;
+}
+
+function SignIn() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function signIn(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    const fields = new FormData(event.currentTarget);
+    try {
+      const result = await supabase.auth.signInWithPassword({
+        email: String(fields.get('email')).trim(),
+        password: String(fields.get('password')),
+      });
+      if (result.error) setError('登录失败，请检查邮箱和密码。');
+    } catch {
+      setError('暂时无法登录，请重试。');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto max-w-lg p-6">
+      <h1 className="mb-5 text-3xl font-semibold">智能报修小助手</h1>
+      <form onSubmit={signIn} className={card + ' space-y-4'}>
+        <label className="block">邮箱<input name="email" type="email" autoComplete="username" required className={inputStyle} /></label>
+        <label className="block">密码<input name="password" type="password" autoComplete="current-password" required className={inputStyle} /></label>
+        {error && <p role="alert" className="text-red-700">{error}</p>}
+        <button disabled={busy} className="rounded bg-slate-900 px-4 py-2 text-white disabled:opacity-50">登录</button>
+      </form>
+    </main>
+  );
+}
+
+function Reports() {
+  const [reports, setReports] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    requestRepairs().then(({ repairs }) => {
+      if (!active) return;
+      setReports(repairs);
+      setSelectedId(current => repairs.some(report => report.id === current) ? current : repairs[0]?.id ?? null);
+      setLoaded(true);
+    }).catch(error => {
+      if (active) setError(error.message);
+    });
+    return () => { active = false; };
+  }, [refresh]);
   const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [notice, setNotice] = useState('');
@@ -32,7 +94,7 @@ export default function RepairPage() {
     : reports;
   const selected = reports.find(report => report.id === selectedId);
 
-  function addReport(event) {
+  async function addReport(event) {
     event.preventDefault();
     const form = event.currentTarget;
     const formData = new FormData(form);
@@ -42,29 +104,64 @@ export default function RepairPage() {
       return;
     }
 
-    const report = { ...values, id: crypto.randomUUID(), status: statuses[0] };
-    setReports(current => [report, ...current]);
-    setSelectedId(report.id);
-    setStatusFilter('');
+    setBusy(true);
     setError('');
-    setNotice('报修已添加，初始状态为待处理。');
-    form.reset();
+    try {
+      const { repair } = await requestRepairs('', 'POST', values);
+      setReports(current => [repair, ...current]);
+      setSelectedId(repair.id);
+      setStatusFilter('');
+      setNotice('报修已添加，初始状态为待处理。');
+      form.reset();
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  function changeStatus(status) {
-    setReports(current => current.map(report =>
-      report.id === selectedId ? { ...report, status } : report
-    ));
-    setNotice('报修状态已更新为' + status + '。');
+  async function changeStatus(status) {
+    setBusy(true);
+    setError('');
+    try {
+      const { repair } = await requestRepairs('/' + selectedId, 'PATCH', { status });
+      setReports(current => current.map(report => report.id === repair.id ? repair : report));
+      setNotice('报修状态已更新为' + repair.status + '。');
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    setBusy(true);
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+    } catch {
+      setError('退出失败，请重试。');
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-10">
       <header>
         <h1 className="text-3xl font-semibold">智能报修小助手</h1>
-        <p className="mt-2 text-sm text-slate-600">演示数据仅保留在当前页面，刷新后重置。</p>
+        <div className="mt-3 flex gap-4 text-sm">
+          <button disabled={busy} className="underline" onClick={() => {
+            setError('');
+            setLoaded(false);
+            setRefresh(value => value + 1);
+          }}>刷新报修</button>
+          <button disabled={busy} className="underline" onClick={signOut}>退出登录</button>
+        </div>
       </header>
       <p role="status" className="text-sm text-slate-700">{notice}</p>
+      {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
+      {!loaded && !error && <p role="status">正在读取报修…</p>}
       <div className="grid gap-6 md:grid-cols-2">
         <section className={card} aria-labelledby="new-report">
           <h2 id="new-report" className="text-xl font-semibold">提交报修</h2>
@@ -77,8 +174,7 @@ export default function RepairPage() {
                   : <input name={key} required className={inputStyle} />}
               </label>
             ))}
-            {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
-            <button className="rounded-md bg-slate-900 px-4 py-2 font-medium text-white">提交报修</button>
+            <button disabled={busy || !loaded} className="disabled:opacity-50 rounded-md bg-slate-900 px-4 py-2 font-medium text-white">提交报修</button>
           </form>
         </section>
         <div className="space-y-6">
@@ -91,7 +187,7 @@ export default function RepairPage() {
                 {statuses.map(status => <option key={status}>{status}</option>)}
               </select>
             </label>
-            {visibleReports.length === 0 && <p className="mt-3 text-sm text-slate-600">此状态下暂无报修。</p>}
+            {loaded && visibleReports.length === 0 && <p className="mt-3 text-sm text-slate-600">此状态下暂无报修。</p>}
             <ul className="mt-3 divide-y divide-slate-200">
               {visibleReports.map(report => (
                 <li key={report.id}>
@@ -118,7 +214,7 @@ export default function RepairPage() {
               </dl>
               <label className="block text-sm font-medium">
                 处理状态
-                <select className={inputStyle} value={selected.status} onChange={event => changeStatus(event.target.value)}>
+                <select className={inputStyle} value={selected.status} disabled={busy || !loaded} onChange={event => changeStatus(event.target.value)}>
                   {statuses.map(status => <option key={status}>{status}</option>)}
                 </select>
               </label>
